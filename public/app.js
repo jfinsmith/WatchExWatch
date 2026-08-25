@@ -102,7 +102,7 @@ function updateStatus() {
   dot.className = 'dot live';
   st.className = 'status';
   const ago = m.lastFetch ? Math.round((Date.now() - m.lastFetch) / 1000) : null;
-  st.textContent = `${m.mode === 'rss' ? 'RSS fallback' : 'Reddit API'} · r/${(m.subreddits || []).join(', r/')} · every ${m.pollSeconds}s${ago !== null ? ` · updated ${ago}s ago` : ''}${m.awaitingPrice ? ` · watching ${m.awaitingPrice} for a price comment` : ''}`;
+  st.textContent = `${m.mode === 'rss' ? 'public feed' : 'Reddit API'} · r/${(m.subreddits || []).join(', r/')} · every ${m.pollSeconds}s${ago !== null ? ` · updated ${ago}s ago` : ''}${m.awaitingPrice ? ` · chasing ${m.awaitingPrice} price comment${m.awaitingPrice > 1 ? 's' : ''}` : ''}`;
 }
 setInterval(updateStatus, 5000);
 
@@ -204,9 +204,9 @@ function card(p, isNew) {
     shot.appendChild(tag);
   } else if (p.price.flairRange) {
     tag.className = 'pricetag guess';
-    tag.innerHTML = `${fmtRange(p.price.flairRange)}<small>flair${state.meta.mode === 'api' ? ' · watching' : ''}</small>`;
+    tag.innerHTML = `${fmtRange(p.price.flairRange)}<small>flair · watching</small>`;
     shot.appendChild(tag);
-  } else if (state.meta.mode === 'api' && Date.now() - p.created < 6 * 3600e3) {
+  } else if (Date.now() - p.created < 6 * 3600e3) {
     tag.className = 'pricetag guess';
     tag.innerHTML = 'no price yet<small>watching comments</small>';
     shot.appendChild(tag);

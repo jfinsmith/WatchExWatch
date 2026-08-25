@@ -19,6 +19,10 @@ const MAX_POSTS = Number(process.env.MAX_POSTS || 1500);
 // after the post. These control how hard we chase that comment.
 const COMMENT_CHECKS_PER_CYCLE = Number(process.env.COMMENT_CHECKS_PER_CYCLE || 8);
 const COMMENT_WATCH_HOURS = Number(process.env.COMMENT_WATCH_HOURS || 6);
+// Unauthenticated reddit.com allows about one request per minute per IP. In RSS mode every
+// request is rationed: the listing gets priority, and spare slots chase price comments.
+const RSS_GAP_SECONDS = Number(process.env.RSS_GAP_SECONDS || 65);
+const RSS_LISTING_SECONDS = Number(process.env.RSS_LISTING_SECONDS || 130);
 const DATA_DIR = path.join(__dirname, 'data');
 const POSTS_FILE = path.join(DATA_DIR, 'posts.json');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
@@ -35,7 +39,8 @@ let state = { read: {}, starred: {} };
 let meta = {
   mode: client.mode,
   subreddits: SUBREDDITS,
-  pollSeconds: client.mode === 'rss' ? Math.max(POLL_SECONDS, 120) : POLL_SECONDS,
+  pollSeconds: client.mode === 'rss' ? RSS_GAP_SECONDS : POLL_SECONDS,
+  listingSeconds: client.mode === 'rss' ? RSS_LISTING_SECONDS : POLL_SECONDS,
   lastFetch: null,
   lastError: null,
   consecutiveErrors: 0,
@@ -90,10 +95,12 @@ function needsCommentCheck(p) {
   return Date.now() - w.last > commentCheckInterval(age);
 }
 
-async function checkCommentPrices() {
-  if (client.mode !== 'api') return;   // public comment feeds rate-limit far too hard
-  const due = sortedPosts().filter(needsCommentCheck).slice(0, COMMENT_CHECKS_PER_CYCLE);
+async function checkCommentPrices(maxChecks) {
+  if (maxChecks < 1) return 0;
+  const due = sortedPosts().filter(needsCommentCheck).slice(0, maxChecks);
+  let spent = 0;
   for (const p of due) {
+    spent += 1;
     const w = commentWatch.get(p.id) || { checks: 0, last: 0 };
     w.checks += 1;
     w.last = Date.now();
@@ -101,6 +108,8 @@ async function checkCommentPrices() {
     try {
       const comments = await client.fetchComments(p.id);
       if (!comments) continue;
+      // In RSS mode the submission itself shows up as an entry by the same author; it carries
+      // no price, so it simply falls through the loop below.
       // Only the seller's own comments count — replies from buyers quote their own numbers.
       const mine = comments
         .filter((c) => c.author && c.author === p.author && !c.stickied)
@@ -121,7 +130,7 @@ async function checkCommentPrices() {
       }
     } catch (err) {
       console.error(`[price] ${p.id}: ${err.message}`);
-      if (/401|429/.test(err.message)) return;   // stop the cycle, the poll loop backs off
+      if (/401|429/.test(err.message)) return spent;   // stop the cycle, the loop backs off
     }
   }
   // Stop tracking posts that aged out.
@@ -129,11 +138,12 @@ async function checkCommentPrices() {
     const p = posts.get(id);
     if (!p || Date.now() - p.created > COMMENT_WATCH_HOURS * 3600_000) commentWatch.delete(id);
   }
+  return spent;
 }
 
 // ---------- polling ----------
 let firstRun = true;
-async function poll() {
+async function pollListing() {
   const fresh = [];
   let errored = null;
   for (const sub of SUBREDDITS) {
@@ -177,13 +187,45 @@ async function poll() {
     console.log(`[poll] +${fresh.length} post(s)`);
     scheduleSave();
   }
+  lastListingAt = Date.now();
   broadcast('meta', meta);
   firstRun = false;
+}
 
-  await checkCommentPrices().catch((e) => console.error(`[price] ${e.message}`));
+// One scheduler for both modes. In API mode there is headroom for a listing poll plus a batch
+// of comment checks every cycle. In RSS mode there is room for a single request, so the loop
+// alternates: the listing when it is due, otherwise one price-comment check.
+let lastListingAt = 0;
+const backoffMs = () => Math.min(meta.consecutiveErrors, 5) * 15_000;
 
-  const backoff = Math.min(meta.consecutiveErrors, 5) * 15;
-  setTimeout(poll, (meta.pollSeconds + backoff) * 1000);
+function schedule(ms) {
+  meta.nextPollAt = Date.now() + ms;
+  setTimeout(loop, ms);
+}
+
+async function loop() {
+  try {
+    if (client.mode === 'api') {
+      await pollListing();
+      await checkCommentPrices(COMMENT_CHECKS_PER_CYCLE);
+      return schedule(meta.pollSeconds * 1000 + backoffMs());
+    }
+
+    const wait = client.nextAllowedIn();
+    if (wait > 0) return schedule(wait + 1500);
+
+    const listingDue = Date.now() - lastListingAt >= RSS_LISTING_SECONDS * 1000;
+    let spent = 0;
+    if (!listingDue) spent = await checkCommentPrices(1);
+    if (!spent) await pollListing();
+    schedule(RSS_GAP_SECONDS * 1000 + backoffMs());
+  } catch (err) {
+    meta.consecutiveErrors += 1;
+    meta.lastError = err.message;
+    broadcast('meta', meta);
+    console.error(`[loop] ${err.message}`);
+    schedule(RSS_GAP_SECONDS * 1000 + backoffMs());
+  }
 }
 
 // ---------- http ----------
@@ -289,5 +331,5 @@ server.listen(PORT, () => {
   console.log(`\n  Watchexchange monitor → http://localhost:${PORT}`);
   console.log(`  mode: ${client.mode === 'api' ? 'Reddit API (OAuth)' : 'RSS fallback — add credentials to .env for full data'}`);
   console.log(`  watching: ${SUBREDDITS.map((s) => 'r/' + s).join(', ')} every ${meta.pollSeconds}s\n`);
-  poll();
+  loop();
 });
