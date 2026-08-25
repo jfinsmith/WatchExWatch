@@ -1,0 +1,12 @@
+{
+  "name": "watchexchange-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live monitor for r/Watchexchange new posts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" }
+}

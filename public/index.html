@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Watchexchange Live</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⌚</text></svg>" />
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brandmark"><span class="dot" id="dot"></span> Watchexchange <span style="color:var(--fg-faint);font-weight:400">live</span></div>
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search title, brand, seller…  (/)" />
+    </div>
+    <div class="seg" id="viewseg">
+      <button data-view="all" class="on">All <span class="n" id="n-all">0</span></button>
+      <button data-view="unread">Unread <span class="n" id="n-unread">0</span></button>
+      <button data-view="alerts">Alerts <span class="n" id="n-alerts">0</span></button>
+      <button data-view="starred">Starred <span class="n" id="n-starred">0</span></button>
+    </div>
+    <button class="iconbtn" id="markall">Mark all read</button>
+    <button class="iconbtn" id="openpanel">⚙︎ Alerts</button>
+  </div>
+  <div class="filters">
+    <select id="ftag">
+      <option value="">All post types</option>
+      <option value="WTS">WTS — for sale</option>
+      <option value="WTB">WTB — wanted</option>
+      <option value="WTT">WTT — trade</option>
+    </select>
+    <label>$ <input id="fmin" type="number" placeholder="min" /></label>
+    <label>– <input id="fmax" type="number" placeholder="max" /></label>
+    <label class="row"><input type="checkbox" id="fpriced" /> has price</label>
+    <label class="row"><input type="checkbox" id="fhidesold" checked /> hide sold</label>
+    <span class="status" id="status">connecting…</span>
+  </div>
+</header>
+
+<button class="newpill" id="newpill"></button>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">Nothing matches these filters.</div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="panel" id="panel">
+  <button class="close" id="closepanel">✕</button>
+  <h3>Alerts</h3>
+  <p class="hint">New posts matching these fire a desktop notification and a chime, and land in the Alerts tab.</p>
+
+  <section>
+    <label class="row"><input type="checkbox" id="a-enabled" /> <b>Enable alerts</b></label>
+    <label class="row"><input type="checkbox" id="a-sound" checked /> Play a sound</label>
+    <label class="row"><input type="checkbox" id="a-notify" checked /> Desktop notification</label>
+    <button class="iconbtn" id="a-perm" style="margin-top:8px">Grant notification permission</button>
+  </section>
+
+  <section>
+    <h3>Keywords</h3>
+    <p class="hint">Comma-separated. Matches title and body — good for references (5513, 16610) or models.</p>
+    <input type="text" id="a-keywords" placeholder="submariner, 5513, snowflake" />
+  </section>
+
+  <section>
+    <h3>Max price</h3>
+    <p class="hint">Only alert when the detected price is at or below this. Blank = any.</p>
+    <input type="number" id="a-maxprice" placeholder="e.g. 4000" />
+    <label class="row" style="margin-top:6px"><input type="checkbox" id="a-wtsonly" checked /> Only [WTS] posts</label>
+  </section>
+
+  <section>
+    <h3>Brands</h3>
+    <p class="hint">Model names count too (a "Speedmaster" post matches Omega).</p>
+    <div class="brandgrid" id="a-brands"></div>
+  </section>
+</aside>
+
+<div class="lb" id="lb">
+  <div class="stage">
+    <button class="close" id="lbclose">✕</button>
+    <button class="lbnav prev" id="lbprev">‹</button>
+    <img id="lbimg" alt="" />
+    <button class="lbnav next" id="lbnext">›</button>
+  </div>
+  <div class="info">
+    <h2 id="lbtitle"></h2>
+    <div id="lbmeta" style="color:var(--fg-dim);font-size:12.5px"></div>
+    <div class="thumbs" id="lbthumbs"></div>
+    <div class="selftext" id="lbbody"></div>
+  </div>
+</div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
