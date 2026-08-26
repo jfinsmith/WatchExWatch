@@ -5,8 +5,11 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { RedditClient } from './lib/reddit.js';
-import { isProxyableHost, BRANDS, priceFromComment } from './lib/parse.js';
+import { isProxyableHost, BRANDS, priceFromComment, originalFromPreview } from './lib/parse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, '.env'));
@@ -23,8 +26,10 @@ const COMMENT_WATCH_HOURS = Number(process.env.COMMENT_WATCH_HOURS || 6);
 // request is rationed: the listing gets priority, and spare slots chase price comments.
 const RSS_GAP_SECONDS = Number(process.env.RSS_GAP_SECONDS || 65);
 const RSS_LISTING_SECONDS = Number(process.env.RSS_LISTING_SECONDS || 130);
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
 const POSTS_FILE = path.join(DATA_DIR, 'posts.json');
+const IMG_CACHE = path.join(DATA_DIR, 'imgcache');
+const IMG_CACHE_MAX = Number(process.env.IMG_CACHE_MAX || 4000);
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 
 const client = new RedditClient({
@@ -48,10 +53,29 @@ let meta = {
 };
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(IMG_CACHE, { recursive: true });
 try {
   const raw = JSON.parse(fs.readFileSync(POSTS_FILE, 'utf8'));
-  for (const p of raw) posts.set(p.id, p);
+  for (const p of raw) posts.set(p.id, upgradeStoredImages(p));
 } catch {}
+
+// Posts archived before the image work stored 140px crops. The originals are reachable from the
+// same media ids, so lift them on load rather than leaving old posts permanently blurry.
+function upgradeStoredImages(p) {
+  if (!Array.isArray(p.images)) return p;
+  const tinyish = (u = '') => /[?&]width=140\b/.test(u);
+  p.images = p.images.map((im) => {
+    const original = originalFromPreview(im.url);
+    if (!original) return im;
+    const tiny = tinyish(im.url) ? im.url : im.tiny;
+    return {
+      url: original,
+      thumb: im.thumb && !tinyish(im.thumb) ? im.thumb : original,
+      ...(tiny ? { tiny } : {}),
+    };
+  });
+  return p;
+}
 try { state = { read: {}, starred: {}, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch {}
 
 let saveTimer = null;
@@ -276,19 +300,16 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/img') {
     const target = url.searchParams.get('u');
+    const width = Math.min(Math.max(Number(url.searchParams.get('w')) || 0, 0), 2048);
     if (!target || !isProxyableHost(target)) { res.writeHead(400); return res.end('bad image host'); }
     try {
-      const upstream = await fetch(target, {
-        headers: { 'User-Agent': client.userAgent, Accept: 'image/*', Referer: 'https://www.reddit.com/' },
-      });
-      if (!upstream.ok) { res.writeHead(upstream.status); return res.end(); }
-      res.writeHead(200, {
-        'Content-Type': upstream.headers.get('content-type') || 'image/jpeg',
-        'Cache-Control': 'public, max-age=86400',
-      });
-      const buf = Buffer.from(await upstream.arrayBuffer());
+      const { buf, type } = await getImage(target, width);
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=604800' });
       return res.end(buf);
-    } catch (e) { res.writeHead(502); return res.end('image fetch failed'); }
+    } catch (e) {
+      res.writeHead(e.status || 502);
+      return res.end('image fetch failed');
+    }
   }
 
   // static
@@ -301,6 +322,78 @@ const server = http.createServer(async (req, res) => {
     res.end(buf);
   } catch { res.writeHead(404); res.end('not found'); }
 });
+
+const execFileP = promisify(execFile);
+const IMG_TYPES = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+let sipsOk = null;
+
+// Reddit serves originals only — i.redd.it ignores resize params — so a 3000px photo would
+// otherwise be sent to every grid card. macOS ships sips; without it we serve the original.
+async function canResize() {
+  if (sipsOk === null) {
+    try { await execFileP('sips', ['--version'], { timeout: 5000 }); sipsOk = true; }
+    catch { sipsOk = false; console.log('  (no sips found — serving full-size images to the grid)'); }
+  }
+  return sipsOk;
+}
+
+let resizeSlots = Number(process.env.RESIZE_CONCURRENCY || 3);
+const resizeQueue = [];
+function acquireResize() {
+  if (resizeSlots > 0) { resizeSlots -= 1; return Promise.resolve(); }
+  return new Promise((resolve) => resizeQueue.push(resolve));
+}
+function releaseResize() {
+  const next = resizeQueue.shift();
+  if (next) next(); else resizeSlots += 1;
+}
+
+async function getImage(target, width) {
+  const ext = (target.match(/\.(jpe?g|png|webp|gif)/i) || [, 'jpg'])[1].toLowerCase();
+  const type = IMG_TYPES[ext] || 'image/jpeg';
+  const key = crypto.createHash('sha1').update(`${target}|${width}`).digest('hex');
+  const file = path.join(IMG_CACHE, `${key}.${ext}`);
+  try { return { buf: await fsp.readFile(file), type }; } catch {}
+
+  const upstream = await fetch(target, {
+    headers: { 'User-Agent': client.userAgent, Accept: 'image/*', Referer: 'https://www.reddit.com/' },
+  });
+  if (!upstream.ok) throw Object.assign(new Error('upstream'), { status: upstream.status });
+  let buf = Buffer.from(await upstream.arrayBuffer());
+
+  if (width && ext !== 'gif' && await canResize()) {
+    const src = path.join(IMG_CACHE, `${key}.src.${ext}`);
+    const out = path.join(IMG_CACHE, `${key}.out.${ext}`);
+    await acquireResize();
+    try {
+      await fsp.writeFile(src, buf);
+      await execFileP('sips', ['-Z', String(width), src, '--out', out], { timeout: 20_000 });
+      const resized = await fsp.readFile(out);
+      if (resized.length) buf = resized;
+    } catch (err) {
+      // Leave buf as the original; a failed resize shouldn't cost the user the image.
+    } finally {
+      releaseResize();
+      fsp.unlink(src).catch(() => {});
+      fsp.unlink(out).catch(() => {});
+    }
+  }
+  fsp.writeFile(file, buf).catch(() => {});
+  return { buf, type };
+}
+
+async function pruneImageCache() {
+  try {
+    const names = await fsp.readdir(IMG_CACHE);
+    if (names.length <= IMG_CACHE_MAX) return;
+    const stats = await Promise.all(names.map(async (n) => {
+      const f = path.join(IMG_CACHE, n);
+      try { return { f, t: (await fsp.stat(f)).mtimeMs }; } catch { return null; }
+    }));
+    stats.filter(Boolean).sort((a, b) => a.t - b.t).slice(0, names.length - IMG_CACHE_MAX)
+      .forEach(({ f }) => fsp.unlink(f).catch(() => {}));
+  } catch {}
+}
 
 function json(res, obj) {
   const s = JSON.stringify(obj);
@@ -331,5 +424,7 @@ server.listen(PORT, () => {
   console.log(`\n  Watchexchange monitor → http://localhost:${PORT}`);
   console.log(`  mode: ${client.mode === 'api' ? 'Reddit API (OAuth)' : 'RSS fallback — add credentials to .env for full data'}`);
   console.log(`  watching: ${SUBREDDITS.map((s) => 'r/' + s).join(', ')} every ${meta.pollSeconds}s\n`);
+  pruneImageCache();
+  setInterval(pruneImageCache, 6 * 3600_000);
   loop();
 });

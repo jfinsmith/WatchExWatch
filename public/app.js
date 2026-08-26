@@ -154,11 +154,38 @@ function fmtRange(r) {
 const countUnread = () => [...state.posts.values()].filter((p) => !state.read.has(p.id)).length;
 
 // ---------------- render ----------------
+// Rebuilding every card on each update restarts every image download. Cards are cached by a
+// key covering everything that affects their markup, so an unchanged card is re-inserted as the
+// same DOM node — already-decoded images included.
+const cardCache = new Map();
+
+function cardKey(p) {
+  return [
+    p.id, p.comments, p.flair, p.price.value, p.price.source,
+    (p.price.flairRange && `${p.price.flairRange.min}-${p.price.flairRange.max}`) || '',
+    state.read.has(p.id) ? 'r' : '', state.starred.has(p.id) ? 's' : '',
+    state.alerted.has(p.id) ? 'a' : '', state.focusId === p.id ? 'f' : '',
+    state.imgIdx.get(p.id) || 0,
+  ].join('|');
+}
+
 function render(newIds = [], keepScroll = false) {
   const grid = $('#grid');
   const y = window.scrollY;
   const list = visiblePosts().slice(0, 300);
-  grid.replaceChildren(...list.map((p) => card(p, newIds.includes(p.id))));
+  const nodes = list.map((p) => {
+    const key = cardKey(p);
+    let el = cardCache.get(p.id);
+    if (!el || el.dataset.key !== key) {
+      el = card(p, newIds.includes(p.id));
+      el.dataset.key = key;
+      cardCache.set(p.id, el);
+    }
+    return el;
+  });
+  const live = new Set(list.map((p) => p.id));
+  for (const id of cardCache.keys()) if (!live.has(id)) cardCache.delete(id);
+  grid.replaceChildren(...nodes);
   $('#empty').style.display = list.length ? 'none' : 'block';
   $('#n-all').textContent = state.posts.size;
   $('#n-unread').textContent = countUnread();
@@ -168,7 +195,13 @@ function render(newIds = [], keepScroll = false) {
   document.title = countUnread() ? `(${countUnread()}) Watchexchange Live` : 'Watchexchange Live';
 }
 
-function img(url) { return `/img?u=${encodeURIComponent(url)}`; }
+// Grid cards ask the proxy for a scaled copy; the lightbox always wants the original.
+// If the URL is already a preview at or below the requested width, skip the resize.
+function img(url, w) {
+  const have = Number((url.match(/[?&]width=(\d+)/i) || [])[1] || 0);
+  const want = w && (!have || have > w) ? `&w=${w}` : '';
+  return `/img?u=${encodeURIComponent(url)}${want}`;
+}
 
 function card(p, isNew) {
   const el = document.createElement('article');
@@ -184,15 +217,17 @@ function card(p, isNew) {
   const shot = document.createElement('div');
   shot.className = 'shot';
   if (cur) {
-    shot.innerHTML = `<img loading="lazy" src="${img(cur.thumb || cur.url)}" alt="" />` +
+    const full = img(cur.thumb || cur.url, 640);
+    shot.innerHTML = `<img loading="lazy" src="${cur.tiny ? img(cur.tiny) : full}"${cur.tiny ? ` data-full="${full}"` : ''} alt="" />` +
       (images.length > 1 ? `
         <button class="nav prev" data-nav="-1">‹</button>
         <button class="nav next" data-nav="1">›</button>
         <span class="count">${idx + 1}/${images.length}</span>
         <div class="dots">${images.map((_, i) => `<i class="${i === idx ? 'on' : ''}"></i>`).join('')}</div>` : '');
   } else {
-    shot.innerHTML = `<div class="noimg">no image${p.partial ? ' (RSS mode)' : ''}</div>`;
+    shot.innerHTML = `<div class="noimg">no image${p.partial ? ' (public feed)' : ''}</div>`;
   }
+  if (cur?.tiny) upgradeImage($('img', shot));
   const tag = document.createElement('span');
   if (p.price.value != null) {
     tag.className = 'pricetag' + (p.price.source === 'body' ? ' guess' : '');
@@ -224,7 +259,7 @@ function card(p, isNew) {
     <div class="title">${escapeHtml(p.title)}</div>
     <div class="chips">${chips}</div>
     <div class="metaline">
-      <span>${ago(p.created)}</span>
+      <span class="age" data-created="${p.created}">${ago(p.created)}</span>
       <span>u/${escapeHtml(p.author || '?')}</span>
       <span>💬 ${p.comments}</span>
       <span class="spacer"></span>
@@ -246,6 +281,16 @@ function card(p, isNew) {
   return el;
 }
 
+// Gallery posts only expose a 140px crop, so paint that immediately and swap in the scaled
+// original once the proxy has produced it.
+function upgradeImage(el) {
+  const full = el?.dataset.full;
+  if (!full) return;
+  const hi = new Image();
+  hi.onload = () => { el.src = full; el.classList.add('sharp'); };
+  hi.src = full;
+}
+
 function shuffle(id, delta) {
   const p = state.posts.get(id);
   if (!p || p.images.length < 2) return;
@@ -255,9 +300,20 @@ function shuffle(id, delta) {
   if (!el) return;
   const im = $('img', el);
   const src = p.images[next];
-  im.src = img(src.thumb || src.url);
+  const full = img(src.thumb || src.url, 640);
+  if (src.tiny) {
+    im.src = img(src.tiny);
+    im.dataset.full = full;
+    im.classList.remove('sharp');
+    upgradeImage(im);
+  } else {
+    delete im.dataset.full;
+    im.classList.add('sharp');
+    im.src = full;
+  }
   $('.count', el).textContent = `${next + 1}/${p.images.length}`;
   $$('.dots i', el).forEach((d, i) => d.classList.toggle('on', i === next));
+  el.dataset.key = cardKey(p);
   if (lb.id === id) showLbImage(next);
 }
 
@@ -308,7 +364,7 @@ function openLightbox(id) {
   ].filter(Boolean);
   $('#lbmeta').innerHTML = bits.join(' &nbsp;·&nbsp; ');
   $('#lbbody').textContent = p.bodyPreview + (p.bodyLength > p.bodyPreview.length ? '…' : '');
-  $('#lbthumbs').innerHTML = p.images.map((im, i) => `<img data-i="${i}" class="${i === lb.idx ? 'on' : ''}" src="${img(im.thumb || im.url)}" />`).join('');
+  $('#lbthumbs').innerHTML = p.images.map((im, i) => `<img data-i="${i}" class="${i === lb.idx ? 'on' : ''}" src="${img(im.thumb || im.url, 160)}" />`).join('');
   showLbImage(lb.idx);
   $('#lb').classList.add('show');
   setRead(id, true);
@@ -348,7 +404,7 @@ function fireAlert(p) {
   if (cfg.notify && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(p.price.display ? `${p.price.display} — ${p.brands[0] || 'Watchexchange'}` : 'New Watchexchange post', {
       body: p.title,
-      icon: p.images[0] ? img(p.images[0].thumb || p.images[0].url) : undefined,
+      icon: p.images[0] ? img(p.images[0].thumb || p.images[0].url, 256) : undefined,
       tag: p.id,
     });
     n.onclick = () => { window.focus(); openLightbox(p.id); };
@@ -505,5 +561,7 @@ function escapeHtml(s = '') {
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
-// refresh relative timestamps
-setInterval(() => { if (!lb.id) render(); }, 60_000);
+// Refresh relative timestamps in place — a full render would discard the loaded images.
+setInterval(() => {
+  for (const el of $$('.age')) el.textContent = ago(Number(el.dataset.created));
+}, 60_000);

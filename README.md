@@ -37,7 +37,7 @@ cp .env.example .env
 |---|---|---|
 | listing latency | ~65s, or ~130s while chasing prices | 30s |
 | request budget | ~1/min per IP, enforced by Reddit | 100/min |
-| images | originals for single-image posts, 140px crops for galleries | full galleries |
+| images | full resolution, one per post | full resolution, whole galleries |
 | price-range flair | not exposed in the feed | yes |
 | price comments | ~1 post checked per 2 min | 8 per cycle |
 
@@ -78,6 +78,19 @@ network makes both of them collect 429s.
 
   Model and reference numbers (`3861`, `ref 16610`, `310.30.42`) are excluded. Body-sourced prices
   render dimmer; a post with several numbers shows `+n more`, with the full list in the detail view.
+- **Images** come through at full resolution. Reddit's `preview.redd.it` URLs are signed against
+  their width, so a 140px gallery crop can't simply be requested larger — but the media id in the
+  path is the same one `i.redd.it` serves the unsigned original under, so the app rewrites
+  `preview.redd.it/abc123.jpg?width=140&…` to `i.redd.it/abc123.jpg`. That's what the lightbox
+  shows. Since i.redd.it ignores resize parameters and hands back the full 3000px original, the
+  proxy scales a 640px copy for grid cards with `sips` and caches both on disk under
+  `data/imgcache/` — later loads are instant. Without `sips` (non-macOS) it serves originals
+  instead. Gallery posts paint their 140px crop immediately and sharpen when the scaled copy is
+  ready. Posts archived before this existed get their URLs lifted on load.
+
+  The one exception is a post linking off-site (imgur and the like): Reddit only ever exposes its
+  own 640px preview of those, so that's what you get.
+
 - **Alerts** (⚙︎ Alerts) match on brands, free-text keywords (good for references like `5513`),
   a max price, and optionally WTS-only. Matches chime, raise a desktop notification, and collect
   in the Alerts tab. Alerts only fire for posts that arrive while the app is open — the backlog
@@ -97,6 +110,9 @@ Environment variables (in `.env`):
 | `RSS_LISTING_SECONDS` | `130` | public-feed mode: how stale the listing may get while chasing price comments |
 | `PORT` | `5173` | |
 | `MAX_POSTS` | `1500` | rolling cap on the on-disk archive |
+| `DATA_DIR` | `./data` | where posts, read state, and the image cache live |
+| `IMG_CACHE_MAX` | `4000` | cached image files kept before the oldest are pruned |
+| `RESIZE_CONCURRENCY` | `3` | parallel `sips` resizes; keeps a cold grid from spawning dozens |
 | `COMMENT_WATCH_HOURS` | `6` | how long to keep checking a priceless post's comments |
 | `COMMENT_CHECKS_PER_CYCLE` | `8` | comment fetches per poll; 1 poll + 8 checks per 30s is well inside Reddit's 100/min |
 
