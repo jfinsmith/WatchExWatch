@@ -329,7 +329,11 @@ const server = http.createServer(async (req, res) => {
   if (!file.startsWith(path.join(__dirname, 'public'))) { res.writeHead(403); return res.end(); }
   try {
     const buf = await fsp.readFile(file);
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+      // Revalidate every load: otherwise the browser happily serves a stale UI after an update.
+      'Cache-Control': 'no-cache',
+    });
     res.end(buf);
   } catch { res.writeHead(404); res.end('not found'); }
 });
