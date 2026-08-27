@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RedditClient } from './lib/reddit.js';
@@ -79,14 +80,24 @@ function upgradeStoredImages(p) {
 try { state = { read: {}, starred: {}, ...JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) }; } catch {}
 
 let saveTimer = null;
+async function saveNow() {
+  const arr = sortedPosts().slice(0, MAX_POSTS);
+  const keep = new Set(arr.map((p) => p.id));
+  for (const id of [...posts.keys()]) if (!keep.has(id)) posts.delete(id);
+  await fsp.writeFile(POSTS_FILE, JSON.stringify(arr)).catch(() => {});
+  await fsp.writeFile(STATE_FILE, JSON.stringify(state)).catch(() => {});
+}
+
 function scheduleSave() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    const arr = sortedPosts().slice(0, MAX_POSTS);
-    for (const id of [...posts.keys()]) if (!arr.find((p) => p.id === id)) posts.delete(id);
-    await fsp.writeFile(POSTS_FILE, JSON.stringify(arr)).catch(() => {});
-    await fsp.writeFile(STATE_FILE, JSON.stringify(state)).catch(() => {});
-  }, 1500);
+  saveTimer = setTimeout(() => { saveNow(); }, 1500);
+}
+
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    clearTimeout(saveTimer);
+    saveNow().finally(() => process.exit(0));
+  });
 }
 
 const sortedPosts = () => [...posts.values()].sort((a, b) => b.created - a.created);
@@ -262,7 +273,7 @@ const server = http.createServer(async (req, res) => {
     meta, brands: BRANDS.map((b) => b.name),
     posts: sortedPosts().slice(0, 400),
     read: state.read, starred: state.starred,
-  });
+  }, req);
 
   if (url.pathname === '/api/stream') {
     res.writeHead(200, {
@@ -287,7 +298,7 @@ const server = http.createServer(async (req, res) => {
       else state.read[id] = Date.now();
     }
     scheduleSave();
-    return json(res, { ok: true, count: Object.keys(state.read).length });
+    return json(res, { ok: true, count: Object.keys(state.read).length }, req);
   }
 
   if (url.pathname === '/api/star' && req.method === 'POST') {
@@ -295,7 +306,7 @@ const server = http.createServer(async (req, res) => {
     if (body.starred === false) delete state.starred[body.id];
     else state.starred[body.id] = Date.now();
     scheduleSave();
-    return json(res, { ok: true });
+    return json(res, { ok: true }, req);
   }
 
   if (url.pathname === '/img') {
@@ -357,6 +368,7 @@ async function getImage(target, width) {
 
   const upstream = await fetch(target, {
     headers: { 'User-Agent': client.userAgent, Accept: 'image/*', Referer: 'https://www.reddit.com/' },
+    signal: AbortSignal.timeout(30_000),
   });
   if (!upstream.ok) throw Object.assign(new Error('upstream'), { status: upstream.status });
   let buf = Buffer.from(await upstream.arrayBuffer());
@@ -395,10 +407,16 @@ async function pruneImageCache() {
   } catch {}
 }
 
-function json(res, obj) {
-  const s = JSON.stringify(obj);
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(s);
+function json(res, obj, req) {
+  const body = Buffer.from(JSON.stringify(obj));
+  const wantsGzip = /\bgzip\b/.test(req?.headers['accept-encoding'] || '') && body.length > 1024;
+  const headers = { 'Content-Type': 'application/json; charset=utf-8' };
+  if (!wantsGzip) { res.writeHead(200, headers); return res.end(body); }
+  zlib.gzip(body, (err, gz) => {
+    if (err) { res.writeHead(200, headers); return res.end(body); }
+    res.writeHead(200, { ...headers, 'Content-Encoding': 'gzip' });
+    res.end(gz);
+  });
 }
 
 function readJson(req) {

@@ -50,12 +50,14 @@ network makes both of them collect 429s.
 |---|---|
 | `/` | focus search |
 | `j` / `k` | move between posts |
-| `←` / `→` | shuffle images of the focused post |
-| `Enter` | open the post detail / full-size image |
-| `m` | toggle read | 
-| `s` | star |
+| `←` / `→` | flip through a post's photos |
+| `Enter` | open the focused post |
+| `m` | toggle read |
+| `s` | save / unsave |
 | `o` | open on Reddit |
-| `Esc` | close |
+| `u` | jump to newest |
+| `?` | shortcut list |
+| `Esc` | close whatever's open |
 
 - **Read state** lives on the server (`data/state.json`), so it survives refreshes and is shared
   between browsers/devices pointed at the same instance. Opening a post marks it read.
@@ -96,7 +98,11 @@ network makes both of them collect 429s.
   in the Alerts tab. Alerts only fire for posts that arrive while the app is open — the backlog
   loaded at startup is never alerted on. A post that arrives priceless and only qualifies once the
   seller comments a price alerts at that moment, not before.
-- **Filters** (type, price range, has-price, hide-sold, search) persist in localStorage.
+- **Filters** — type, price range, has-price, hide-sold, sort (newest / price up / price down), and
+  free-text search. Clicking a brand chip or a seller name filters to it; active filters show as
+  removable chips in the toolbar. Everything persists in localStorage.
+- **Light and dark themes**, following the system by default, with a toggle in the toolbar.
+- Cards render in pages of 60 and grow as you scroll, so a 1,500-post archive stays responsive.
 
 ## Config
 
@@ -119,9 +125,20 @@ Environment variables (in `.env`):
 ## Layout
 
 ```
-server.js        polling loop, SSE, image proxy, static files, read/star state
-lib/reddit.js    OAuth token + /new fetch, Atom fallback parser
-lib/parse.js     tags, price extraction, brand detection, gallery/preview images
-public/          the UI (no framework)
-data/            posts.json + state.json (gitignored)
+server.js        scheduler, SSE, resizing image proxy, static files, read/saved state
+lib/reddit.js    OAuth + /new fetch, rate-limit pacing, Atom parsers
+lib/parse.js     tags, price extraction, brand detection, flair brackets, image URLs
+public/          the UI — no framework, no build step
+test/            node:test suites for the parsing and rate-limit logic
+data/            posts.json, state.json, imgcache/ (gitignored)
 ```
+
+## Tests
+
+```bash
+npm test
+```
+
+Covers price extraction (including the reference-number false positives), flair brackets, brand
+and tag detection, the Atom parsers, image-URL selection, and the rate-limit pacing — the parts
+where reddit's data is messy enough to regress quietly.

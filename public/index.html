@@ -3,96 +3,175 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
 <title>Watchexchange Live</title>
 <link rel="stylesheet" href="/style.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⌚</text></svg>" />
 </head>
 <body>
-<header>
-  <div class="bar">
-    <div class="brandmark"><span class="dot" id="dot"></span> Watchexchange <span style="color:var(--fg-faint);font-weight:400">live</span></div>
-    <div class="search">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-      <input id="q" type="search" placeholder="Search title, brand, seller…  (/)" />
+
+<header class="topbar">
+  <div class="row row-main">
+    <div class="wordmark">
+      <span class="pulse" id="dot" aria-hidden="true"></span>
+      <span class="wordmark-text">Watchexchange</span>
+      <span class="wordmark-sub">live</span>
     </div>
-    <div class="seg" id="viewseg">
+
+    <label class="search" for="q">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+      <input id="q" type="search" placeholder="Search titles, brands, sellers…" autocomplete="off" spellcheck="false" />
+      <kbd>/</kbd>
+    </label>
+
+    <nav class="tabs" id="viewseg" aria-label="View">
       <button data-view="all" class="on">All <span class="n" id="n-all">0</span></button>
       <button data-view="unread">Unread <span class="n" id="n-unread">0</span></button>
       <button data-view="alerts">Alerts <span class="n" id="n-alerts">0</span></button>
-      <button data-view="starred">Starred <span class="n" id="n-starred">0</span></button>
+      <button data-view="starred">Saved <span class="n" id="n-starred">0</span></button>
+    </nav>
+
+    <div class="actions">
+      <button class="icon-btn" id="markall" title="Mark everything visible as read">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 13l4 4 8-9"/><path d="M11 15l2 2 9-10"/></svg>
+        <span class="label">Mark read</span>
+      </button>
+      <button class="icon-btn" id="themebtn" title="Theme" aria-label="Toggle theme">
+        <svg class="ico-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="ico-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 1010.5 10.5z"/></svg>
+      </button>
+      <button class="icon-btn accent-btn" id="openpanel" title="Alert settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 10-12 0c0 6-2 7-2 7h16s-2-1-2-7"/><path d="M10.5 20a2 2 0 003 0"/></svg>
+        <span class="label">Alerts</span>
+      </button>
     </div>
-    <button class="iconbtn" id="markall">Mark all read</button>
-    <button class="iconbtn" id="openpanel">⚙︎ Alerts</button>
   </div>
-  <div class="filters">
-    <select id="ftag">
-      <option value="">All post types</option>
+
+  <div class="row row-filters">
+    <select id="ftag" class="control" aria-label="Post type">
+      <option value="">All types</option>
       <option value="WTS">WTS — for sale</option>
       <option value="WTB">WTB — wanted</option>
       <option value="WTT">WTT — trade</option>
     </select>
-    <label>$ <input id="fmin" type="number" placeholder="min" /></label>
-    <label>– <input id="fmax" type="number" placeholder="max" /></label>
-    <label class="row"><input type="checkbox" id="fpriced" /> has price</label>
-    <label class="row"><input type="checkbox" id="fhidesold" checked /> hide sold</label>
-    <span class="status" id="status">connecting…</span>
+
+    <div class="control range" role="group" aria-label="Price range">
+      <span class="prefix">$</span>
+      <input id="fmin" type="number" placeholder="min" inputmode="numeric" aria-label="Minimum price" />
+      <span class="dash">–</span>
+      <input id="fmax" type="number" placeholder="max" inputmode="numeric" aria-label="Maximum price" />
+    </div>
+
+    <select id="fsort" class="control" aria-label="Sort">
+      <option value="new">Newest first</option>
+      <option value="priceasc">Price: low to high</option>
+      <option value="pricedesc">Price: high to low</option>
+    </select>
+
+    <label class="check"><input type="checkbox" id="fpriced" /><span>Has price</span></label>
+    <label class="check"><input type="checkbox" id="fhidesold" checked /><span>Hide sold</span></label>
+
+    <div class="active-filters" id="activefilters"></div>
+
+    <div class="status" id="status" title="Feed status">connecting…</div>
   </div>
 </header>
 
-<button class="newpill" id="newpill"></button>
+<button class="jump" id="newpill" hidden></button>
 
 <main>
   <div class="grid" id="grid"></div>
-  <div class="empty" id="empty" style="display:none">Nothing matches these filters.</div>
+  <div class="empty" id="empty" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg>
+    <p class="empty-title">Nothing matches</p>
+    <p class="empty-sub">Loosen a filter, or wait for the next post to land.</p>
+  </div>
+  <div class="more-sentinel" id="sentinel"></div>
 </main>
 
-<div class="scrim" id="scrim"></div>
-<aside class="panel" id="panel">
-  <button class="close" id="closepanel">✕</button>
-  <h3>Alerts</h3>
-  <p class="hint">New posts matching these fire a desktop notification and a chime, and land in the Alerts tab.</p>
+<div class="scrim" id="scrim" hidden></div>
 
-  <section>
-    <label class="row"><input type="checkbox" id="a-enabled" /> <b>Enable alerts</b></label>
-    <label class="row"><input type="checkbox" id="a-sound" checked /> Play a sound</label>
-    <label class="row"><input type="checkbox" id="a-notify" checked /> Desktop notification</label>
-    <button class="iconbtn" id="a-perm" style="margin-top:8px">Grant notification permission</button>
+<aside class="drawer" id="panel" aria-label="Alert settings" hidden>
+  <div class="drawer-head">
+    <h2>Alerts</h2>
+    <button class="ghost-btn" id="closepanel" aria-label="Close">✕</button>
+  </div>
+  <p class="hint">New posts that match chime, raise a notification, and collect in the Alerts tab.</p>
+
+  <section class="field">
+    <label class="switch">
+      <input type="checkbox" id="a-enabled" />
+      <span class="track"><span class="knob"></span></span>
+      <span class="switch-label">Enable alerts</span>
+    </label>
+    <label class="check"><input type="checkbox" id="a-sound" checked /><span>Play a chime</span></label>
+    <label class="check"><input type="checkbox" id="a-notify" checked /><span>Desktop notification</span></label>
+    <button class="ghost-btn wide" id="a-perm">Grant notification permission</button>
   </section>
 
-  <section>
+  <section class="field">
     <h3>Keywords</h3>
-    <p class="hint">Comma-separated. Matches title and body — good for references (5513, 16610) or models.</p>
-    <input type="text" id="a-keywords" placeholder="submariner, 5513, snowflake" />
+    <p class="hint">Comma separated. Good for references — <code>5513</code>, <code>16610</code>.</p>
+    <input type="text" id="a-keywords" class="control wide" placeholder="submariner, 5513, snowflake" />
   </section>
 
-  <section>
-    <h3>Max price</h3>
-    <p class="hint">Only alert when the detected price is at or below this. Blank = any.</p>
-    <input type="number" id="a-maxprice" placeholder="e.g. 4000" />
-    <label class="row" style="margin-top:6px"><input type="checkbox" id="a-wtsonly" checked /> Only [WTS] posts</label>
+  <section class="field">
+    <h3>Ceiling</h3>
+    <p class="hint">Only alert at or below this. A flair bracket counts when the exact price isn't posted yet.</p>
+    <input type="number" id="a-maxprice" class="control wide" placeholder="e.g. 4000" />
+    <label class="check"><input type="checkbox" id="a-wtsonly" checked /><span>Only [WTS] posts</span></label>
   </section>
 
-  <section>
-    <h3>Brands</h3>
-    <p class="hint">Model names count too (a "Speedmaster" post matches Omega).</p>
-    <div class="brandgrid" id="a-brands"></div>
+  <section class="field">
+    <h3>Brands <span class="count-badge" id="a-brandcount">0</span></h3>
+    <p class="hint">Model names count too — a Speedmaster post matches Omega.</p>
+    <input type="search" id="a-brandsearch" class="control wide" placeholder="Filter brands…" autocomplete="off" />
+    <div class="chosen" id="a-chosen"></div>
+    <div class="brandlist" id="a-brands"></div>
   </section>
 </aside>
 
-<div class="lb" id="lb">
-  <div class="stage">
-    <button class="close" id="lbclose">✕</button>
-    <button class="lbnav prev" id="lbprev">‹</button>
+<div class="lightbox" id="lb" hidden>
+  <div class="lb-stage">
+    <button class="ghost-btn lb-close" id="lbclose" aria-label="Close">✕</button>
+    <button class="lb-nav prev" id="lbprev" aria-label="Previous image">‹</button>
     <img id="lbimg" alt="" />
-    <button class="lbnav next" id="lbnext">›</button>
+    <button class="lb-nav next" id="lbnext" aria-label="Next image">›</button>
+    <div class="lb-counter" id="lbcounter"></div>
   </div>
-  <div class="info">
+  <aside class="lb-info">
     <h2 id="lbtitle"></h2>
-    <div id="lbmeta" style="color:var(--fg-dim);font-size:12.5px"></div>
-    <div class="thumbs" id="lbthumbs"></div>
-    <div class="selftext" id="lbbody"></div>
+    <div class="lb-price" id="lbprice"></div>
+    <dl class="lb-facts" id="lbfacts"></dl>
+    <div class="lb-actions">
+      <a class="ghost-btn" id="lbopen" target="_blank" rel="noreferrer">Open on Reddit ↗</a>
+      <button class="ghost-btn" id="lbcopy">Copy link</button>
+      <button class="ghost-btn" id="lbstar">★ Save</button>
+    </div>
+    <div class="lb-thumbs" id="lbthumbs"></div>
+    <p class="lb-body" id="lbbody"></p>
+  </aside>
+</div>
+
+<div class="help" id="help" hidden>
+  <div class="help-card">
+    <div class="drawer-head"><h2>Keyboard</h2><button class="ghost-btn" id="helpclose" aria-label="Close">✕</button></div>
+    <dl class="keys">
+      <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Move between posts</dd>
+      <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Flip through a post's photos</dd>
+      <dt><kbd>↵</kbd></dt><dd>Open the focused post</dd>
+      <dt><kbd>m</kbd></dt><dd>Toggle read</dd>
+      <dt><kbd>s</kbd></dt><dd>Save / unsave</dd>
+      <dt><kbd>o</kbd></dt><dd>Open on Reddit</dd>
+      <dt><kbd>u</kbd></dt><dd>Jump to newest</dd>
+      <dt><kbd>?</kbd></dt><dd>This list</dd>
+      <dt><kbd>esc</kbd></dt><dd>Close</dd>
+    </dl>
   </div>
 </div>
+
+<div class="toasts" id="toasts"></div>
 
 <script src="/app.js" type="module"></script>
 </body>
