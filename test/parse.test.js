@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   derivePrice, extractTags, detectBrands, parseFlairRange, fmtRange,
-  priceFromComment, originalFromPreview, isProxyableHost, BRANDS,
+  priceFromComment, originalFromPreview, isProxyableHost, BRANDS, detectSold,
 } from '../lib/parse.js';
 
 test('price: title wins over body', () => {
@@ -94,4 +94,24 @@ test('proxy: only reddit and imgur hosts are fetchable', () => {
   assert.equal(isProxyableHost('https://evil.example.com/a.jpg'), false);
   assert.equal(isProxyableHost('http://localhost:5173/secret'), false);
   assert.equal(isProxyableHost('not a url'), false);
+});
+
+test('sold: flair, title, and seller comment', () => {
+  assert.equal(detectSold({ flair: 'Sold' }), true);
+  assert.equal(detectSold({ flair: '$1000-$2500' }), false);
+  assert.equal(detectSold({ title: '[WTS] Rolex — SOLD pending payment' }), true);
+  assert.equal(detectSold({ comment: 'Sale pending, first in line has it' }), true);
+  assert.equal(detectSold({ comment: 'PM sent!' }), false);
+});
+
+test('sold: negations do not retire a live post', () => {
+  assert.equal(detectSold({ title: 'Never sold outside of AD' }), false);
+  assert.equal(detectSold({ comment: 'This will be sold to the first offer' }), false);
+  assert.equal(detectSold({ title: '[WTS] Unsold from last week, relisting' }), false);
+});
+
+test('price: dollar sign can trail the number', () => {
+  assert.equal(derivePrice('[WTS] Invicta Grand Diver 200$ OBO', '').value, 200);
+  assert.equal(derivePrice('[WTS] Seiko 1,250$ shipped', '').value, 1250);
+  assert.equal(derivePrice('[WTS] Tudor 3.5k$', '').value, 3500);
 });

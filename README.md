@@ -65,7 +65,8 @@ network makes both of them collect 429s.
   1. the **title** — `$3,400`, `3400 USD`, `asking 3.4k`, `Price: 3400`
   2. the **post body**
   3. the **seller's own comment**. The subreddit requires sale details in a top-level comment, so
-     a post often appears with no price and gains one minutes later. Any post under
+     a post often appears with no price and gains one minutes later. That comment is also kept and
+     shown in the detail view (the public feed carries no post body) and folded into search. Any post under
      `COMMENT_WATCH_HOURS` old with no price is re-checked — every 45s for its first 10 minutes,
      then every 5 minutes for an hour, then every 15 minutes. Only comments written by the post's
      author count; a buyer quoting their own number doesn't. When one lands, the card updates live
@@ -98,9 +99,17 @@ network makes both of them collect 429s.
   in the Alerts tab. Alerts only fire for posts that arrive while the app is open — the backlog
   loaded at startup is never alerted on. A post that arrives priceless and only qualifies once the
   seller comments a price alerts at that moment, not before.
-- **Filters** — type, price range, has-price, hide-sold, sort (newest / price up / price down), and
-  free-text search. Clicking a brand chip or a seller name filters to it; active filters show as
-  removable chips in the toolbar. Everything persists in localStorage.
+- **Search** matches every whitespace-separated term (AND), across the title, brands, seller,
+  flair, the detected price, and — crucially — the seller's comment. So `omega speedmaster 3861`
+  narrows instead of needing that exact phrase, and reference numbers like `116610` or `3506.31`
+  find their post even when they only appear in the comment.
+- **Filters** — type, price range, has-price, hide-sold, sort (newest / price up / price down).
+  Clicking a brand chip or a seller name filters to it; active filters show as removable chips in
+  the toolbar. Everything persists in localStorage.
+- **Sold posts** are hidden by default and retire live: when a listing's flair flips to Sold, its
+  title changes, or the seller comments that it's gone, the card fades out (or shows a SOLD ribbon
+  and greys out if you've unchecked *Hide sold*). Detection is deliberately tight, so "never sold
+  by a dealer" in a description won't retire a live post.
 - **Light and dark themes**, following the system by default, with a toggle in the toolbar.
 - Cards render in pages of 60 and grow as you scroll, so a 1,500-post archive stays responsive.
 

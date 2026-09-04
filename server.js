@@ -10,7 +10,7 @@ import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RedditClient } from './lib/reddit.js';
-import { isProxyableHost, BRANDS, priceFromComment, originalFromPreview } from './lib/parse.js';
+import { isProxyableHost, BRANDS, priceFromComment, originalFromPreview, detectSold } from './lib/parse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadDotEnv(path.join(__dirname, '.env'));
@@ -57,7 +57,11 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(IMG_CACHE, { recursive: true });
 try {
   const raw = JSON.parse(fs.readFileSync(POSTS_FILE, 'utf8'));
-  for (const p of raw) posts.set(p.id, upgradeStoredImages(p));
+  for (const p of raw) {
+    const up = upgradeStoredImages(p);
+    if (up.sold === undefined) up.sold = detectSold({ flair: up.flair, title: up.title });
+    posts.set(up.id, up);
+  }
 } catch {}
 
 // Posts archived before the image work stored 140px crops. The originals are reachable from the
@@ -122,9 +126,11 @@ function commentCheckInterval(ageMs) {
 }
 
 function needsCommentCheck(p) {
-  if (p.price.value != null) return false;
+  if (p.sold) return false;
+  // Even once priced, keep an eye out briefly for a "sold" comment so it can retire itself.
   const age = Date.now() - p.created;
   if (age > COMMENT_WATCH_HOURS * 3600_000) return false;
+  if (p.price.value != null) return age < 3 * 3600_000;
   const w = commentWatch.get(p.id);
   if (!w) return true;
   return Date.now() - w.last > commentCheckInterval(age);
@@ -143,25 +149,49 @@ async function checkCommentPrices(maxChecks) {
     try {
       const comments = await client.fetchComments(p.id);
       if (!comments) continue;
-      // In RSS mode the submission itself shows up as an entry by the same author; it carries
-      // no price, so it simply falls through the loop below.
       // Only the seller's own comments count — replies from buyers quote their own numbers.
+      // In RSS mode the submission itself appears as an entry by the same author; it has no
+      // price and simply falls through.
       const mine = comments
         .filter((c) => c.author && c.author === p.author && !c.stickied)
         .sort((a, b) => a.created - b.created);
-      for (const c of mine) {
-        const found = priceFromComment(c.body);
-        if (!found) continue;
-        const updated = {
-          ...p,
-          price: { ...found, flairRange: p.price.flairRange, commentUrl: c.permalink },
-        };
+
+      let updated = posts.get(p.id) || p;
+      let changed = false;
+
+      // Retire the post if the seller has said it's sold.
+      if (!updated.sold && mine.some((c) => detectSold({ comment: c.body }))) {
+        updated = { ...updated, sold: true };
+        changed = true;
+        console.log(`[sold] ${p.id} — seller's comment`);
+      }
+
+      // The seller's first substantive comment is the real listing (price, condition, terms) —
+      // the public feed never carries this, so keep it for search and the detail view.
+      if (!updated.sellerComment) {
+        const detail = mine.find((c) => c.body && c.body.length > 40);
+        if (detail) { updated = { ...updated, sellerComment: detail.body.slice(0, 2000) }; changed = true; }
+      }
+
+      // First price the seller quotes.
+      if (updated.price.value == null) {
+        for (const c of mine) {
+          const found = priceFromComment(c.body);
+          if (!found) continue;
+          updated = { ...updated, price: { ...found, flairRange: updated.price.flairRange, commentUrl: c.permalink } };
+          changed = true;
+          console.log(`[price] ${p.id} → ${found.display} from u/${c.author}'s comment`);
+          break;
+        }
+      }
+
+      if (changed) {
         posts.set(p.id, updated);
-        commentWatch.delete(p.id);
-        console.log(`[price] ${p.id} → ${found.display} from u/${c.author}'s comment`);
         broadcast('update', updated);
         scheduleSave();
-        break;
+      }
+      if (updated.sold || (updated.price.value != null && Date.now() - p.created > 3 * 3600_000)) {
+        commentWatch.delete(p.id);
       }
     } catch (err) {
       console.error(`[price] ${p.id}: ${err.message}`);
@@ -177,6 +207,23 @@ async function checkCommentPrices(maxChecks) {
 }
 
 // ---------- polling ----------
+// A fresh listing entry never carries a comment price, the seller's comment, or (in public-feed
+// mode) flair — those are discovered later and live only on the stored copy. Merge so a re-poll
+// refreshes the volatile fields without discarding what we already learned.
+function mergePost(prev, next) {
+  const m = { ...next, firstSeen: prev.firstSeen };
+  // Keep the better price: an exact one already found (comment/body/title) beats a fresh blank.
+  if (prev.price?.value != null && next.price?.value == null) {
+    m.price = prev.price;
+  } else {
+    m.price = { ...next.price, flairRange: next.price?.flairRange ?? prev.price?.flairRange ?? null };
+  }
+  if (prev.sellerComment && !m.sellerComment) m.sellerComment = prev.sellerComment;
+  // The listing's flair can flip to Sold; otherwise keep whatever we detected before.
+  m.sold = detectSold({ flair: next.flair, title: next.title }) || prev.sold || false;
+  return m;
+}
+
 let firstRun = true;
 async function pollListing() {
   const fresh = [];
@@ -188,13 +235,14 @@ async function pollListing() {
         const prev = posts.get(p.id);
         if (!prev) {
           p.firstSeen = Date.now();
+          p.sold = detectSold({ flair: p.flair, title: p.title });
           posts.set(p.id, p);
           fresh.push(p);
         } else {
-          // Keep first-seen ordering but refresh mutable fields (flair flips to SOLD, comment count).
-          posts.set(p.id, { ...p, firstSeen: prev.firstSeen });
-          if (prev.flair !== p.flair || prev.comments !== p.comments) {
-            broadcast('update', { ...p, firstSeen: prev.firstSeen });
+          const merged = mergePost(prev, p);
+          posts.set(p.id, merged);
+          if (prev.flair !== merged.flair || prev.comments !== merged.comments || prev.sold !== merged.sold) {
+            broadcast('update', merged);
           }
         }
       }
@@ -213,7 +261,7 @@ async function pollListing() {
     meta.lastFetch = Date.now();
   }
   meta.mode = client.mode;
-  meta.awaitingPrice = sortedPosts().filter((p) => p.price.value == null && Date.now() - p.created < COMMENT_WATCH_HOURS * 3600_000).length;
+  meta.awaitingPrice = sortedPosts().filter((p) => !p.sold && p.price.value == null && Date.now() - p.created < COMMENT_WATCH_HOURS * 3600_000).length;
 
   if (fresh.length) {
     fresh.sort((a, b) => a.created - b.created);

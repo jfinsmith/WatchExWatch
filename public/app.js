@@ -92,6 +92,11 @@ function connect() {
     // A post that arrived priceless can qualify once the seller comments a price.
     if (state.sessionNew.has(p.id) && !state.alerted.has(p.id)
         && had?.price.value == null && p.price.value != null && matchesAlert(p)) fireAlert(p);
+    // Retire a card the moment it sells, if sold posts are hidden.
+    if (p.sold && !had?.sold && filters.hideSold) {
+      const el = $(`.card[data-id="${p.id}"]`);
+      if (el) { el.classList.add('leaving'); setTimeout(render, 320); return; }
+    }
     render();
     if (lb.id === p.id) fillLightbox(p);
   });
@@ -128,6 +133,24 @@ function updateStatus() {
 setInterval(updateStatus, 5000);
 
 // -------------------------------------------------------------- filtering
+// Search matches when every whitespace-separated term appears somewhere in the post — title,
+// brands, seller, flair, the seller's comment, the detected price, and any candidate figures.
+// AND-ing terms lets "omega speedmaster 3861" narrow instead of needing that exact phrase.
+function haystack(p) {
+  if (p._hay) return p._hay;
+  const parts = [
+    p.title, p.author, p.flair, p.brands.join(' '),
+    p.bodyPreview, p.sellerComment,
+    p.price?.display, (p.price?.candidates || []).map((v) => '$' + v).join(' '),
+    p.tags.join(' '),
+  ];
+  return (p._hay = parts.filter(Boolean).join(' \u0001 ').toLowerCase());
+}
+function matchesQuery(p, terms) {
+  const hay = haystack(p);
+  return terms.every((t) => hay.includes(t));
+}
+
 // A price is either known exactly (title / body / seller's comment) or bracketed by the flair
 // the subreddit requires on WTS posts. Filters and sorting work off whichever exists.
 function priceBounds(p) {
@@ -154,7 +177,7 @@ const SORTERS = {
 };
 
 function visiblePosts() {
-  const q = filters.q.trim().toLowerCase();
+  const q = filters.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const min = filters.min === '' ? null : Number(filters.min);
   const max = filters.max === '' ? null : Number(filters.max);
   return [...state.posts.values()]
@@ -162,7 +185,7 @@ function visiblePosts() {
       if (state.view === 'unread' && state.read.has(p.id)) return false;
       if (state.view === 'starred' && !state.starred.has(p.id)) return false;
       if (state.view === 'alerts' && !state.alerted.has(p.id)) return false;
-      if (filters.hideSold && (p.tags.includes('SOLD') || /\bsold\b/i.test(p.flair))) return false;
+      if (filters.hideSold && (p.sold || p.tags.includes('SOLD'))) return false;
       if (filters.tag && !p.tags.includes(filters.tag)) return false;
       if (filters.brand && !p.brands.includes(filters.brand)) return false;
       if (filters.author && p.author !== filters.author) return false;
@@ -173,7 +196,7 @@ function visiblePosts() {
         if (min !== null && b.max < min) return false;
         if (max !== null && b.min > max) return false;
       }
-      if (q && !`${p.title} ${p.author} ${p.brands.join(' ')} ${p.bodyPreview}`.toLowerCase().includes(q)) return false;
+      if (q.length && !matchesQuery(p, q)) return false;
       return true;
     })
     .sort(SORTERS[filters.sort] || SORTERS.new);
@@ -193,6 +216,7 @@ function cardKey(p) {
     p.id, p.comments, p.flair, p.price.value, p.price.source, r ? `${r.min}-${r.max}` : '',
     state.read.has(p.id) ? 'r' : '', state.starred.has(p.id) ? 's' : '',
     state.alerted.has(p.id) ? 'a' : '', state.focusId === p.id ? 'f' : '',
+    p.sold ? 'sold' : '', p.sellerComment ? 'c' : '',
     state.imgIdx.get(p.id) || 0,
   ].join('|');
 }
@@ -249,7 +273,8 @@ function card(p, isNew) {
   const el = document.createElement('article');
   const read = state.read.has(p.id);
   el.className = ['card', read ? 'read' : 'unread', isNew ? 'enter' : '',
-    state.alerted.has(p.id) ? 'alerted' : '', state.focusId === p.id ? 'focused' : ''].filter(Boolean).join(' ');
+    state.alerted.has(p.id) ? 'alerted' : '', p.sold ? 'sold' : '',
+    state.focusId === p.id ? 'focused' : ''].filter(Boolean).join(' ');
   el.dataset.id = p.id;
 
   const images = p.images || [];
@@ -272,6 +297,7 @@ function card(p, isNew) {
     shot.innerHTML = `<div class="noimg">${ICON.photo}<span>no photo${p.partial ? ' in the public feed' : ''}</span></div>`;
   }
   shot.append(priceTag(p));
+  if (p.sold) { const r = document.createElement('span'); r.className = 'sold-ribbon'; r.textContent = 'SOLD'; shot.append(r); }
   el.append(shot);
 
   const body = document.createElement('div');
@@ -459,8 +485,10 @@ function fillLightbox(p) {
   openLink.textContent = p.price.commentUrl ? 'Open the price comment ↗' : 'Open on Reddit ↗';
   $('#lbstar').textContent = state.starred.has(p.id) ? '★ Saved' : '★ Save';
 
-  const body = p.bodyPreview?.trim();
-  $('#lbbody').textContent = body ? body + (p.bodyLength > p.bodyPreview.length ? '…' : '') : '';
+  const detail = (p.sellerComment || p.bodyPreview || '').trim();
+  const bodyEl = $('#lbbody');
+  bodyEl.textContent = detail;
+  bodyEl.classList.toggle('from-comment', !!p.sellerComment && !p.bodyPreview);
   $('#lbthumbs').innerHTML = p.images.length > 1
     ? p.images.map((im, i) => `<img data-i="${i}" class="${i === lb.idx ? 'on' : ''}" src="${img(im.thumb || im.url, 160)}" alt="" />`).join('')
     : '';
